@@ -1336,6 +1336,119 @@ Stencil attachments are controlled by `stencilTestEnable`, with additional state
 
 If depthTestEnable is TRUE, otherwise, any, since with depth testing disabled the depth test cannot fail.
 
+### Cross Command Buffer Detection and Tracking
+
+Additional hazard conditions can only be detected when tracking accesses and synchronization operations across command buffers.  There are two times when this is possible, when command buffers are submitted to a queue, and when secondary command buffer execution is recorded to the primary command buffer. In order to avoid full replay of the access and synchronization from the submitted or executed buffer, only the *first* access (as defined below) for a given resource will be validated against the most recent access prior to the submit or execution command i.e. the External Context -- the current accesses in the Queue Access Context or Command Buffer Access Context respectively.
+
+To account for barrier operations prior to the first accesses, all synchronization operation must be recorded, and applied sequentially to the accesses from the External Context.  Before each synchronization operation is applied however, the External Context access must be checked against first accesses that occur prior to the barrier (based on tag value).  The effect of External Context accesses, synchronization operation and the current command buffer access state must be combine into an update Queue Access Context state during record phase
+
+#### First Access Tracking
+
+First access tracking is accomplished through tracking the access usage, ordering, rules for the first read access at any given stage until the first write access for the context. These additional fields  are stored in the ResoureAccessState, and are updated and resolved at for each operation modifying that state including access updates, barriers, and resolve operations.
+
+First accesses are stored as a vector (see note on use of small vector below) of records (usage, ordering rule, tag). 
+
+##### Read Access
+
+Until a write access is encountered, for a given resource the read usage, ordering, and tag information are recorded first time the stage is used unless a barrier for that stage exists in the access state. Once a first write has occurred, no additional updates to the first read information are performed. The read stages present in the first access vector are stored in a bit mask, to avoid searching the vector per access.
+
+##### Write Access
+
+Usage, ordering, and tag  information is recorded for the first write access for a given resource for a given command buffer is recorded.  Unlike the last write access updates,  read access information is not cleared, as that information is needed for hazard detection against accesses in the external context. The first write access (if present) will always be the last entry in the  first access vector.  
+
+**IMPLEMENTATION NOTE** 
+
+- convert ordering rules to an enum -- plumb through to update from UpdateAccessState(image)
+- create a simple "small vector allocation" class for the per stage arrays (initial size guess 4 (transfer, a write stage, a read stage typical usage))
+- consider declaring stage/access index as byte to reduce size of first access record   (though the tags are now huge)
+- Care will need to be taken with layout transition writes, w.r.t. Detection and update.
+
+#### Tagging Enhancements
+
+To fully track accesses from (potentially) secondary command buffers and through command buffer submission additional information is required relative to single command buffer tags.
+
+secondary_index, secondary_command -- when an access is imported from an executed secondary command buffer, the tag index and command of the secondary command buffer access are stored in the secondary_index and secondary_command of the calling context's resource access state, while the index and command fields store the current tag information of the recording command buffer.
+
+submit_index -- stores a value uniquely identifying the submission of the command.
+
+The submit_index should be considered a "most significant" field for comparing tags. So that all unsubmitted command buffers sort *after* submitted command buffers, the submit_index is initialized to kMaxIndex. The secondary_index likewise represents a "least significant" field for comparison.  
+
+**IMPLEMENTATION NOTE** given the greatly enlarged size of the tag, consider some shared tagging approach... potentially allocate at the access context, command buffer access context/queue access context level and store as plain pointer, or use of a shared pointer. Right now it's 4x 64bit which is 2x the size of a shared pointer... with the size savings of the "small vector" (going from 32 to 4 tags as a minimum record size for first access/last reads).. this is still a net 4x saving on tag storage..  so maybe we can ignore ATM.
+
+#### Sync Operation Tracking
+
+In order to apply barriers occurring prior to the first access to accesses from the external context, ssynchronization operations must be recorded, with all parameters to reapply these barriers at submit/execute time. These will be stored in the Command Buffer Access State and tagged with the same tagging scheme as access and synchronization operations recorded to the Resource Access State.  Note that the storage must be deep copies of the input parameters, as the application is free to reuse any memory after returning from a Vulkan API call.
+
+**IMPLEMENTATION NOTE** -- to ensure consistent application of the synchronization operations, the record time application of the synchronization operations and replay time application should be performed using the *recorded* state, and use interfaces that can be applied to both recorded and external access contexts.
+
+#### Detecting  Hazards from External Contexts
+
+To detect hazards between External Context previous accesses and the first access of the submitted or executed command buffer, the synchronization and first access operation must be replayed against previous access.  As usual for the validation phase this replay is done against a copy of the previous access context. This replay is done by dividing the tag timeline by synchronization operation. After applying the synchronization operation to the copy of the previous access context (including barrier hazard detection), the previous access is DetectHazard checked vs. the first accesses subsequent to that operation and prior to the the next synchronization operation.   To reduce redundant tests, after each Detect, remove from the previous access context all entries corresponding to ranges where all first accesses have been applied (i.e. completed first accesses).  Repeat this process until all first accesses have been applied/detected.
+
+##### Detecting Hazards Between previous and first accesses
+
+Given a tag range, and a previous access ResourceAcccessState, for each first access in range, DetectHazard   on previous access.
+
+**IMPLEMENTATION NOTE**
+
+Given that read stage access are added in read time order, only the first and last reads need to be checked to know if *any* of the given reads are in the tag range.
+
+Given the likelihood that the barriers present in the previous access are sufficient (either at the beginning of the process are by the time the tag range is reached), it may be useful to compare the first access read_stages mask against
+
+Inputs Previous Access, Tag Range
+
+​	For each first access in tag range
+
+​		prev.DetectHazard(usage(first access))  // Need to add first access tagging to  hazard as well.  
+
+Detecting Barrier Hazards vs. previous accesses
+
+Hazard reporting -- requires changes in tagging?
+
+
+
+
+
+***THAR BE DRAGONS!!!!***
+
+Sketch of approach -- start with a copy of the external context
+
+for each recorded synch op (or until context copy is empty)
+
+​	for all accesses: detect hazards for first accesses prior to barrier tag
+
+​	for all accesses: cull external accesses that are no long most recent from context copy
+
+​    apply barrier to context copy 
+
+forall: detect hazards
+
+forall: cull
+
+#### Queue Access Context
+
+Similar to a Command Buffer Access Context, the Queue Access Context hold the AccessContext and other state reflecting the accumulation of all submitted access an synchronization operations for a given queue.
+
+#### Updating External Contexts
+
+create copy of external context, excluding all resources with a last_write in command buffer context, also only include reads missing from command buffer context
+
+update external context with all resources with last_write in command buffer context
+
+for each recorded synch op (or until context copy is empty)
+
+​	for all accesses: resolve to with access state with resources tagged prior to sync command tag
+
+​    cull fully resolved from copy
+
+​    apply barrier to context copy (excluding layout transitions (or anything else that would write))
+
+forall: detect hazards
+
+forall: cull
+
+#### 
+
 ### Host Synchronization commands
 
 **TODO/KNOWN LIMITATION:** Host synchronization not supported in phases 1 and 2.
