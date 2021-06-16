@@ -1364,6 +1364,13 @@ bool BestPractices::ValidateCmdBeginRenderPass(VkCommandBuffer commandBuffer, Re
         return skip;
     }
 
+    if (pRenderPassBegin->renderArea.extent.width == 0 || pRenderPassBegin->renderArea.extent.height == 0) {
+        skip |= LogWarning(device, kVUID_BestPractices_BeginRenderPass_ZeroSizeRenderArea,
+                           "Renderpass has a zero size Render Area.\n"
+                           "This renderpass can not write to any attachments, and can "
+                           "only be used for side-effects such as layout transitions.");
+    }
+
     auto rp_state = GetRenderPassState(pRenderPassBegin->renderPass);
     if (rp_state) {
         if (rp_state->createInfo.flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT) {
