@@ -66,9 +66,14 @@ TEST_F(VkNvidiaBestPracticesLayerTest, TilingLinear) {
     RETURN_IF_SKIP(InitBestPracticesFramework(kEnableNVIDIAValidation));
     RETURN_IF_SKIP(InitState());
 
+    const auto format = VK_FORMAT_A8B8G8R8_UNORM_PACK32;
+    if (!FormatFeaturesAreSupported(DeviceObj()->Physical().handle(), format, VK_IMAGE_TILING_LINEAR, VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT)) {
+        GTEST_SKIP() << "device doesn't support linear sampled A8B8G8R8_UNORM_PACK32 images";
+    }
+
     VkImageCreateInfo image_ci = vku::InitStructHelper();
     image_ci.imageType = VK_IMAGE_TYPE_2D;
-    image_ci.format = VK_FORMAT_A8B8G8R8_UNORM_PACK32;
+    image_ci.format = format;
     image_ci.extent = { 512, 512, 1 };
     image_ci.mipLevels = 1;
     image_ci.arrayLayers = 1;

@@ -1094,6 +1094,7 @@ class PositiveGpuAVParameterized : public GpuAVTest,
 
 TEST_P(PositiveGpuAVParameterized, SettingsCombinations) {
     TEST_DESCRIPTION("Validate illegal firstInstance values");
+    AddRequiredExtensions(VK_EXT_INLINE_UNIFORM_BLOCK_EXTENSION_NAME);
     AddRequiredFeature(vkt::Feature::multiDrawIndirect);
     AddRequiredFeature(vkt::Feature::drawIndirectFirstInstance);
 
